@@ -1,13 +1,19 @@
-from pyomo.environ import ConcreteModel, Var, Objective, Constraint, NonNegativeReals, minimize, sin
+from pyomo.environ import ConcreteModel, Var, Objective, Constraint, NonNegativeReals, minimize, RealSet, sin, Set
+from math import pi  # Importar pi do módulo math
 from pyomo.opt import SolverFactory
-import pandas as pd
 from config_2 import DADOS_BARRAS, DADOS_LINHA, DADOS_DEMANDA, CDEF
-import math 
+
 
 modelo = ConcreteModel()
 
 modelo.geracao = Var(DADOS_BARRAS['NUM_BARRA'], within=NonNegativeReals)
-modelo.deficit = Var(within=NonNegativeReals)
+modelo.deficit = Var(within=NonNegativeReals)# Variáveis para os fluxos de potência nas linhas
+
+# Variáveis para os ângulos de fase das tensões, com a barra de referência fixada em 0 e as outras barras entre -pi e pi
+modelo.theta = Var(DADOS_BARRAS['NUM_BARRA'], bounds=(-pi, pi))
+modelo.theta[1].fix(0)  # Fixar o ângulo da barra de referência em 0
+
+
 
 def custo_geracao_e_deficit(modelo):
     custo_geracao = sum(DADOS_BARRAS.loc[barra-1, 'a'] * modelo.geracao[barra] + 
@@ -37,6 +43,26 @@ def balanco_demanda_oferta_com_deficit(modelo):
     return total_geracao + modelo.deficit == total_demanda
 
 modelo.balanco = Constraint(rule=balanco_demanda_oferta_com_deficit)
+
+modelo.LINHAS = Set(initialize=[(de, para) for de, para in zip(DADOS_LINHA['DE'], DADOS_LINHA['PARA'])])
+modelo.P = Var(modelo.LINHAS, within=RealSet)
+
+# Definindo a regra da restrição
+def fluxo_potencia_nl_rule(modelo, i, j):
+    X_ij = DADOS_LINHA[(DADOS_LINHA['DE'] == i) & (DADOS_LINHA['PARA'] == j)].iloc[0]['SUSCEPTÂNCIA(OHMS)']
+    return modelo.P[i, j] == ((modelo.theta[i] - modelo.theta[j])**2 / X_ij)
+
+modelo.fluxo_potencia_nl = Constraint(modelo.LINHAS, rule=fluxo_potencia_nl_rule)
+
+def limites_potencia_rule(modelo, i, j):
+    limite = DADOS_LINHA[(DADOS_LINHA['DE'] == i) & (DADOS_LINHA['PARA'] == j)].iloc[0]['LIMITE(MW)']
+    return (-limite, modelo.P[i, j], limite)
+
+modelo.limites_potencia = Constraint(modelo.LINHAS, rule=limites_potencia_rule)
+
+
+
+
 
 solver = SolverFactory('ipopt', executable='F:\\ipopt\\bin\\ipopt.exe')  
 resultado = solver.solve(modelo, tee=True)
