@@ -15,6 +15,15 @@ modelo.deficit = Var(within=NonNegativeReals)
 modelo.theta = Var(DADOS_BARRAS['NUM_BARRA'], bounds=(-pi, pi))
 modelo.theta[1].fix(0)  # Fixar o ângulo da barra de referência em 0
 modelo.P = Var(modelo.LINHAS, within=Reals)
+modelo.perdas = Var(modelo.LINHAS, within=NonNegativeReals)
+
+def perdas_rule(modelo, i, j):
+    G_ij = DADOS_LINHA.loc[(DADOS_LINHA['DE'] == i) & (DADOS_LINHA['PARA'] == j), 'CONDUTÂNCIA(OHMS)'].iloc[0]
+    return modelo.perdas[i, j] == G_ij * (modelo.theta[i] - modelo.theta[j])**2
+
+modelo.restricao_perdas = Constraint(modelo.LINHAS, rule=perdas_rule)
+
+
 
 # Função objetivo
 def custo_geracao_e_deficit(modelo):
@@ -24,9 +33,12 @@ def custo_geracao_e_deficit(modelo):
                         DADOS_BARRAS.loc[barra-1, 'e'] * sin(DADOS_BARRAS.loc[barra-1, 'f'] *
                         (DADOS_BARRAS.loc[barra-1, 'PMIN(MW)'] - modelo.geracao[barra]))
                         for barra in DADOS_BARRAS['NUM_BARRA'])
+    
+    total_perdas = sum(modelo.perdas[i, j] for (i, j) in modelo.LINHAS)
     custo_deficit = CDEF * modelo.deficit
-    return custo_geracao + custo_deficit
+    return custo_geracao + custo_deficit + total_perdas
 modelo.custo_total = Objective(rule=custo_geracao_e_deficit, sense=minimize)
+
 
 # Restrições de limites de geração
 def limites_geracao_min(modelo, i):
@@ -38,20 +50,18 @@ def limites_geracao_max(modelo, i):
 modelo.limites_max = Constraint(DADOS_BARRAS['NUM_BARRA'], rule=limites_geracao_max)
 
 # Restrição de balanço de demanda e oferta com déficit e fluxo de potência
-def balanco_demanda_oferta_rule(modelo, barra):
+def balanco_demanda_oferta_com_perdas_rule(modelo, barra):
     balanco = modelo.geracao[barra] + modelo.deficit
-
     for (i, j) in modelo.LINHAS:
-        susceptancia = DADOS_LINHA.loc[(DADOS_LINHA['DE'] == i) & (DADOS_LINHA['PARA'] == j), 'SUSCEPTÂNCIA(OHMS)'].iloc[0]
-        if i == barra:  # Fluxo saindo da barra
-            balanco -= modelo.P[i, j]
-        elif j == barra:  # Fluxo entrando na barra
+        if i == barra:  # Se a barra é a origem, subtrai o fluxo e as perdas
+            balanco -= (modelo.P[i, j] + modelo.perdas[i, j])
+        elif j == barra:  # Se a barra é o destino, apenas soma o fluxo
             balanco += modelo.P[i, j]
-
     demanda = DADOS_DEMANDA[0][barra]
     return balanco == demanda
 
-modelo.balanco_demanda_oferta = Constraint(DADOS_BARRAS['NUM_BARRA'], rule=balanco_demanda_oferta_rule)
+modelo.balanco_demanda_oferta_com_perdas = Constraint(DADOS_BARRAS['NUM_BARRA'], rule=balanco_demanda_oferta_com_perdas_rule)
+
 
 
 # Restrições de fluxo de potência e limites de potência
@@ -90,7 +100,7 @@ for barra in DADOS_BARRAS['NUM_BARRA']:
 total_gerado = sum(modelo.geracao[i].value for i in DADOS_BARRAS['NUM_BARRA'])
 total_demandado = sum(DADOS_DEMANDA[0][i+1] for i in range(len(DADOS_BARRAS)))
 print(f"\nTotal Geral Gerado: {total_gerado} MW, Total Geral Demandado: {total_demandado} MW")
-print("Déficit Total de Energia: {modelo.deficit.value} MW")
+print(f"Déficit Total de Energia: {modelo.deficit.value} MW")
 
 # Fluxos de Potência entre as Barras
 print("\nFluxos de Potência entre as Barras:")
@@ -114,8 +124,15 @@ for barra in DADOS_BARRAS['NUM_BARRA']:
     deficit = modelo.deficit.value
     fluxo_total = sum(modelo.P[i, j].value for (i, j) in modelo.LINHAS if i == barra) - \
                   sum(modelo.P[i, j].value for (i, j) in modelo.LINHAS if j == barra)
+    perdas_total = sum(modelo.perdas[i, j].value for (i, j) in modelo.LINHAS if i == barra)  # Perdas nas linhas saindo da barra
     demanda = DADOS_DEMANDA[0][barra]
-    balanco = geracao + deficit - fluxo_total
-    print(f"Barra {barra} - Balanço: {balanco} MW, Demanda: {demanda} MW")
+    balanco = geracao + deficit - fluxo_total - perdas_total  # Subtrai as perdas do balanço
+    print(f"Barra {barra} - Geração: {geracao} MW, Déficit: {deficit} MW, Fluxo Líquido: {fluxo_total} MW, Perdas: {perdas_total} MW, Demanda: {demanda} MW")
     if abs(balanco - demanda) > 1e-6:
         print(f"  Atenção: Desbalanceamento detectado na Barra {barra}!")
+
+
+print("\nPerdas de Potência nas Linhas:")
+for (i, j) in modelo.LINHAS:
+    perdas = modelo.perdas[i, j].value
+    print(f"Perdas na linha de {i} para {j}: {perdas} MW")
