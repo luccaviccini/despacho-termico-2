@@ -1,7 +1,9 @@
-from pyomo.environ import ConcreteModel, Var, Objective, Constraint, NonNegativeReals, minimize, maximize
+from pyomo.environ import ConcreteModel, Var, Objective, Constraint, NonNegativeReals, minimize, sin
 from pyomo.opt import SolverFactory
 import pandas as pd
 from config_2 import DADOS_BARRAS, DADOS_LINHA, DADOS_DEMANDA, CDEF
+import math 
+
 modelo = ConcreteModel()
 
 modelo.geracao = Var(DADOS_BARRAS['NUM_BARRA'], within=NonNegativeReals)
@@ -10,7 +12,9 @@ modelo.deficit = Var(within=NonNegativeReals)
 def custo_geracao_e_deficit(modelo):
     custo_geracao = sum(DADOS_BARRAS.loc[barra-1, 'a'] * modelo.geracao[barra] + 
                         (DADOS_BARRAS.loc[barra-1, 'b'] / 2) * modelo.geracao[barra]**2 + 
-                        (DADOS_BARRAS.loc[barra-1, 'c'] / 3) * modelo.geracao[barra]**3
+                        (DADOS_BARRAS.loc[barra-1, 'c'] / 3) * modelo.geracao[barra]**3 +
+                        DADOS_BARRAS.loc[barra-1, 'e'] * sin(DADOS_BARRAS.loc[barra-1, 'f'] * 
+                        (DADOS_BARRAS.loc[barra-1, 'PMIN(MW)'] - modelo.geracao[barra]))
                         for barra in DADOS_BARRAS['NUM_BARRA'])
     custo_deficit = CDEF * modelo.deficit
     return custo_geracao + custo_deficit
