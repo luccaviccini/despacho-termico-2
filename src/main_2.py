@@ -14,7 +14,7 @@ modelo.geracao = Var(DADOS_BARRAS['NUM_BARRA'], within=NonNegativeReals)
 modelo.deficit = Var(within=NonNegativeReals)
 modelo.theta = Var(DADOS_BARRAS['NUM_BARRA'], bounds=(-pi, pi))
 modelo.theta[1].fix(0)  # Fixar o ângulo da barra de referência em 0
-modelo.P = Var(modelo.LINHAS, within=Reals)
+modelo.fluxo = Var(modelo.LINHAS, within=Reals)
 modelo.perdas = Var(modelo.LINHAS, within=NonNegativeReals)
 
 def perdas_rule(modelo, i, j):
@@ -29,9 +29,7 @@ modelo.restricao_perdas = Constraint(modelo.LINHAS, rule=perdas_rule)
 def custo_geracao_e_deficit(modelo):
     custo_geracao = sum(DADOS_BARRAS.loc[barra-1, 'a'] * modelo.geracao[barra] +
                         (DADOS_BARRAS.loc[barra-1, 'b'] / 2) * modelo.geracao[barra]**2 +
-                        (DADOS_BARRAS.loc[barra-1, 'c'] / 3) * modelo.geracao[barra]**3 +
-                        DADOS_BARRAS.loc[barra-1, 'e'] * sin(DADOS_BARRAS.loc[barra-1, 'f'] *
-                        (DADOS_BARRAS.loc[barra-1, 'PMIN(MW)'] - modelo.geracao[barra]))
+                        (DADOS_BARRAS.loc[barra-1, 'c'] / 3) * modelo.geracao[barra]**3 
                         for barra in DADOS_BARRAS['NUM_BARRA'])
     
     total_perdas = sum(modelo.perdas[i, j] for (i, j) in modelo.LINHAS)
@@ -54,9 +52,9 @@ def balanco_demanda_oferta_com_perdas_rule(modelo, barra):
     balanco = modelo.geracao[barra] + modelo.deficit
     for (i, j) in modelo.LINHAS:
         if i == barra:  # Se a barra é a origem, subtrai o fluxo e as perdas
-            balanco -= (modelo.P[i, j] + modelo.perdas[i, j])
+            balanco -= (modelo.fluxo[i, j] + modelo.perdas[i, j])
         elif j == barra:  # Se a barra é o destino, apenas soma o fluxo
-            balanco += modelo.P[i, j]
+            balanco += modelo.fluxo[i, j]
     demanda = DADOS_DEMANDA[0][barra]
     return balanco == demanda
 
@@ -67,12 +65,12 @@ modelo.balanco_demanda_oferta_com_perdas = Constraint(DADOS_BARRAS['NUM_BARRA'],
 # Restrições de fluxo de potência e limites de potência
 def fluxo_potencia_rule(modelo, i, j):
     susceptancia = DADOS_LINHA.loc[(DADOS_LINHA['DE'] == i) & (DADOS_LINHA['PARA'] == j), 'SUSCEPTÂNCIA(OHMS)'].iloc[0]
-    return modelo.P[i, j] == susceptancia * (modelo.theta[i] - modelo.theta[j])
+    return modelo.fluxo[i, j] == susceptancia * (modelo.theta[i] - modelo.theta[j])
 modelo.fluxo_potencia = Constraint(modelo.LINHAS, rule=fluxo_potencia_rule)
 
 def limites_potencia_rule(modelo, i, j):
     limite = DADOS_LINHA.loc[(DADOS_LINHA['DE'] == i) & (DADOS_LINHA['PARA'] == j), 'LIMITE(MW)'].iloc[0]
-    return (-limite, modelo.P[i, j], limite)
+    return (-limite, modelo.fluxo[i, j], limite)
 modelo.limites_potencia = Constraint(modelo.LINHAS, rule=limites_potencia_rule)
 
 # Solução do modelo
@@ -105,7 +103,7 @@ print(f"Déficit Total de Energia: {modelo.deficit.value} MW")
 # Fluxos de Potência entre as Barras
 print("\nFluxos de Potência entre as Barras:")
 for (i, j) in modelo.LINHAS:
-    fluxo_potencia = modelo.P[i, j].value
+    fluxo_potencia = modelo.fluxo[i, j].value
     limite = DADOS_LINHA.loc[(DADOS_LINHA['DE'] == i) & (DADOS_LINHA['PARA'] == j), 'LIMITE(MW)'].iloc[0]
     print(f"De {i} para {j} - Fluxo: {fluxo_potencia} MW, Limite: {limite} MW")
     if abs(fluxo_potencia) > limite:
@@ -122,8 +120,8 @@ print("\nVerificação do Balanço de Energia em Cada Barra:")
 for barra in DADOS_BARRAS['NUM_BARRA']:
     geracao = modelo.geracao[barra].value
     deficit = modelo.deficit.value
-    fluxo_total = sum(modelo.P[i, j].value for (i, j) in modelo.LINHAS if i == barra) - \
-                  sum(modelo.P[i, j].value for (i, j) in modelo.LINHAS if j == barra)
+    fluxo_total = sum(modelo.fluxo[i, j].value for (i, j) in modelo.LINHAS if i == barra) - \
+                  sum(modelo.fluxo[i, j].value for (i, j) in modelo.LINHAS if j == barra)
     perdas_total = sum(modelo.perdas[i, j].value for (i, j) in modelo.LINHAS if i == barra)  # Perdas nas linhas saindo da barra
     demanda = DADOS_DEMANDA[0][barra]
     balanco = geracao + deficit - fluxo_total - perdas_total  # Subtrai as perdas do balanço
